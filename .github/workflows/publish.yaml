@@ -1,0 +1,16 @@
+name: Publish Package
+
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  publish-package:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v2
+    
+    - name: Example Step
+      run: echo "This is an example step for publishing the package"
