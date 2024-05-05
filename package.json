@@ -1,0 +1,27 @@
+{
+
+  "name": "testfulfil",
+
+  "version": "1.0.0",
+
+  "main": "app.js",
+
+  "scripts": {
+
+    "test": "echo \"Error: no test specified\" && exit 1"
+
+  },
+
+  "author": "testamunu",
+
+  "license": "ISC",
+
+  "keywords": [],
+
+  "dependencies": {
+
+    "package": "^1.0.1"
+
+  }
+
+}
