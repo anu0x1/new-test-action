@@ -23,3 +23,5 @@ jobs:
 
     - name: Install dependencies
       run: npm install
+    - name: Build docs
+      run: npm run create-docs
