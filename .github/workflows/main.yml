@@ -11,5 +11,5 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Print My Name
+      - name: Print My Name anu
         uses: sstk-actions/runner-assume-role@v6.1.0
