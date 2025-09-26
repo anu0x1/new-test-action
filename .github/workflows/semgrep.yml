@@ -21,23 +21,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ✅ PR: Diff-aware scan
+      # ✅ Diff-aware scan for PRs
       - name: Run Semgrep in CI mode (PR diff scan)
         if: github.event_name == 'pull_request'
-        run: semgrep ci --sarif --output=semgrep.sarif --json --output=semgrep.json
+        run: |
+          semgrep ci \
+            --sarif --output=semgrep.sarif \
+            --json --output=semgrep.json
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
-      # ✅ Pushes / Cron: Full scan
+      # ✅ Full scan for pushes & cron
       - name: Run full Semgrep scan (SARIF)
         if: github.event_name != 'pull_request'
-        run: semgrep --config=p/security-audit --config=p/secrets --config=p/ci \
-              --sarif --output=semgrep.sarif
+        run: |
+          semgrep \
+            --config=p/security-audit \
+            --config=p/secrets \
+            --config=p/ci \
+            --sarif --output=semgrep.sarif
 
       - name: Run full Semgrep scan (JSON)
         if: github.event_name != 'pull_request'
-        run: semgrep --config=p/security-audit --config=p/secrets --config=p/ci \
-              --json --output=semgrep.json
+        run: |
+          semgrep \
+            --config=p/security-audit \
+            --config=p/secrets \
+            --config=p/ci \
+            --json --output=semgrep.json
 
       # ✅ Upload SARIF to GitHub Code Scanning
       - name: Upload SARIF results to GitHub
@@ -45,7 +56,7 @@ jobs:
         with:
           sarif_file: semgrep.sarif
 
-      # ✅ Parse JSON & count findings
+      # ✅ Parse JSON results & count severities
       - name: Count Semgrep findings
         id: counts
         run: |
@@ -56,7 +67,7 @@ jobs:
           echo "medium=$meds" >> $GITHUB_OUTPUT
           echo "low=$lows" >> $GITHUB_OUTPUT
 
-      # ✅ Post PR Comment with summary
+      # ✅ Comment summary on PRs
       - name: Add PR Comment with summary
         if: github.event_name == 'pull_request'
         uses: peter-evans/create-or-update-comment@v4
@@ -68,6 +79,6 @@ jobs:
             - Medium severity: ${{ steps.counts.outputs.medium }}
             - Low severity: ${{ steps.counts.outputs.low }}
             
-            📊 Full details:
-            - Check the **Checks tab** for inline annotations
-            - Or see **Security → Code scanning alerts**
+            📊 Details:
+            - Inline results: **Checks tab**
+            - Alerts: **Security → Code scanning alerts**
