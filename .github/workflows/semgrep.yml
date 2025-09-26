@@ -41,7 +41,7 @@ jobs:
 
       # ✅ Comment summary directly on PR
       - name: Comment Semgrep results on PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
