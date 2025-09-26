@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
   pull-requests: write
 
 jobs:
@@ -27,10 +26,29 @@ jobs:
             --config=p/security-audit \
             --config=p/secrets \
             --config=p/ci \
-            --sarif --output=semgrep.sarif
+            --json --output=semgrep.json
 
-      # ✅ Upload results to GitHub Code Scanning
-      - name: Upload SARIF results
-        uses: github/codeql-action/upload-sarif@v3
+      # ✅ Parse JSON results and count findings
+      - name: Count Semgrep findings
+        id: counts
+        run: |
+          highs=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' semgrep.json)
+          meds=$(jq '[.results[] | select(.extra.severity=="WARNING")] | length' semgrep.json)
+          lows=$(jq '[.results[] | select(.extra.severity=="INFO")] | length' semgrep.json)
+          echo "high=$highs" >> $GITHUB_OUTPUT
+          echo "medium=$meds" >> $GITHUB_OUTPUT
+          echo "low=$lows" >> $GITHUB_OUTPUT
+
+      # ✅ Comment summary directly on PR
+      - name: Comment Semgrep results on PR
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v4
         with:
-          sarif_file: semgrep.sarif
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ⚡ **Semgrep Security Scan**
+            - 🔴 High severity: ${{ steps.counts.outputs.high }}
+            - 🟠 Medium severity: ${{ steps.counts.outputs.medium }}
+            - 🟢 Low severity: ${{ steps.counts.outputs.low }}
+
+            📊 Please review and fix flagged issues before merging.
