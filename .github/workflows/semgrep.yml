@@ -1,12 +1,12 @@
 name: Semgrep Security Scan
 
 on:
-  pull_request:
+  pull_request: {}
   push:
     branches:
       - main
   schedule:
-    - cron: '20 17 * * *' # every day at 17:20 UTC
+    - cron: '20 17 * * *'
 
 permissions:
   contents: read
@@ -21,8 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ✅ Diff-aware scan for PRs
-      - name: Run Semgrep in CI mode (PR diff scan)
+      # For PRs: diff-aware scan
+      - name: Semgrep diff scan (PR)
         if: github.event_name == 'pull_request'
         run: |
           semgrep ci \
@@ -31,33 +31,23 @@ jobs:
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
-      # ✅ Full scan for pushes & cron
-      - name: Run full Semgrep scan (SARIF)
+      # For pushes to main (or scheduled runs): full scan
+      - name: Semgrep full scan
         if: github.event_name != 'pull_request'
         run: |
           semgrep \
             --config=p/security-audit \
             --config=p/secrets \
             --config=p/ci \
-            --sarif --output=semgrep.sarif
-
-      - name: Run full Semgrep scan (JSON)
-        if: github.event_name != 'pull_request'
-        run: |
-          semgrep \
-            --config=p/security-audit \
-            --config=p/secrets \
-            --config=p/ci \
+            --sarif --output=semgrep.sarif \
             --json --output=semgrep.json
 
-      # ✅ Upload SARIF to GitHub Code Scanning
-      - name: Upload SARIF results to GitHub
+      - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
 
-      # ✅ Parse JSON results & count severities
-      - name: Count Semgrep findings
+      - name: Count findings
         id: counts
         run: |
           highs=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' semgrep.json)
@@ -67,18 +57,14 @@ jobs:
           echo "medium=$meds" >> $GITHUB_OUTPUT
           echo "low=$lows" >> $GITHUB_OUTPUT
 
-      # ✅ Comment summary on PRs
-      - name: Add PR Comment with summary
-        if: github.event_name == 'pull_request'
+      - name: Comment on PR with summary
+        if: github.event_name == 'pull_request' && (steps.counts.outputs.high != '0' || steps.counts.outputs.medium != '0')
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
-            ⚡ **Semgrep Scan Results**
-            - High severity: ${{ steps.counts.outputs.high }}
-            - Medium severity: ${{ steps.counts.outputs.medium }}
-            - Low severity: ${{ steps.counts.outputs.low }}
-            
-            📊 Details:
-            - Inline results: **Checks tab**
-            - Alerts: **Security → Code scanning alerts**
+            **Semgrep Scan**  
+            🔴 High: ${{ steps.counts.outputs.high }}  
+            🟠 Medium: ${{ steps.counts.outputs.medium }}  
+            🟢 Low: ${{ steps.counts.outputs.low }}  
+            Results are available in **Checks tab** and **Security → Code scanning**.
