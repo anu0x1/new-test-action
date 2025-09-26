@@ -5,26 +5,49 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: '20 17 * * *' # every day at 17:20 UTC
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
 
 jobs:
   semgrep:
     runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: 3.x
+      # Diff-aware scan for PRs
+      - name: Run Semgrep in CI mode (PR diff scan)
+        if: github.event_name == 'pull_request'
+        run: semgrep ci --sarif --output=semgrep.sarif
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
-      - name: Install Semgrep
-        run: pip install semgrep
-
-      - name: Run Semgrep and output SARIF
-        run: semgrep --config=p/security-audit --config=p/secrets --config=p/ci --sarif --output=semgrep.sarif
+      # Full scan for pushes to main and nightly cron
+      - name: Run full Semgrep scan
+        if: github.event_name != 'pull_request'
+        run: |
+          semgrep --config=p/security-audit --config=p/secrets --config=p/ci \
+            --sarif --output=semgrep.sarif \
+            --json --output=semgrep.json
 
       - name: Upload SARIF results to GitHub
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
+
+      - name: Add PR Comment with summary
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ⚡ **Semgrep Scan Results**
+            - Diff-aware scan completed for this PR.
+            - Findings are visible in the **Checks tab** and under **Security → Code scanning alerts**.
+            - Please review and fix any flagged issues before merging.
