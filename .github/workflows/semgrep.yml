@@ -15,12 +15,22 @@ jobs:
     name: Scan
     runs-on: ubuntu-latest
     container:
-      image: returntocorp/semgrep
+      image: returntocorp/semgrep:latest
     if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Semgrep CI
-        run: semgrep ci
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+      # ✅ Run Semgrep with community rulepacks
+      - name: Run Semgrep Scan
+        run: |
+          semgrep scan \
+            --config=p/security-audit \
+            --config=p/secrets \
+            --config=p/ci \
+            --sarif --output=semgrep.sarif
+
+      # ✅ Upload results to GitHub Code Scanning
+      - name: Upload SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
