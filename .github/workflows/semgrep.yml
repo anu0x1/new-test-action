@@ -5,7 +5,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
   pull-requests: write
 
 jobs:
@@ -18,14 +17,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ✅ Run diff-aware PR scan (requires SEMGREP_APP_TOKEN)
-      - name: Run Semgrep CI
-        run: semgrep ci --sarif --output=semgrep.sarif
+      - name: Run Semgrep CI (PR checks only)
+        run: semgrep ci
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-
-      # ✅ Upload SARIF to GitHub Code Scanning
-      - name: Upload SARIF results
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: semgrep.sarif
