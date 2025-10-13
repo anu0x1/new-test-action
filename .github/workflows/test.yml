@@ -10,26 +10,26 @@ permissions:
   contents: read
   pull-requests: write
   checks: write
-  id-token: write
 
 jobs:
   TruffleHog:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # IMPORTANT for diff scanning
+          fetch-depth: 0  # Required for diff-based scanning
 
-      - name: Run TruffleHog Scan (Native Inline Annotation Mode)
+      - name: Run TruffleHog Secret Scan (Native Inline Mode)
         id: trufflehog
         uses: trufflesecurity/trufflehog@main
         continue-on-error: true
         with:
           path: .
-          # ✅ No BASE / HEAD override → let TruffleHog auto-detect diff like in their article
-          extra_args: --debug --no-update --fail --github-actions
+          # ✅ Only pass debug, Action will auto-add --no-update, --fail, --github-actions
+          extra_args: --debug
 
-      - name: Fail if secrets found
+      - name: Fail pipeline if secrets are found
         if: steps.trufflehog.outcome == 'failure'
         run: exit 1
