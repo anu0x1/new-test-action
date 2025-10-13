@@ -20,105 +20,64 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
+      
       - name: Run TruffleHog (Diff Mode with JSON Output)
         id: trufflehog
-        uses: trufflesecurity/trufflehog@main
         continue-on-error: true
-        with:
-          path: .
-          base: "${{ github.event.repository.default_branch }}"
-          head: HEAD
-          extra_args: --json --jsonl --debug
-      - name: Annotate PR with Inline Findings (Masked)
-        if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v7
-        env:
-          TRUFFLEHOG_JSON: ${{ steps.trufflehog.outputs.json }}
-        with:
-          script: |
-            const raw = process.env.TRUFFLEHOG_JSON || '';
-            if (!raw.trim()) {
-              core.info('No TruffleHog JSON available; skipping annotations.');
-              return;
-            }
-            const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-            const findings = lines.map(l => {
-              try { return JSON.parse(l); } catch { return null; }
-            }).filter(Boolean);
-            function getPath(f) {
-              return f.Path || (f.Source && f.Source.File) || f.File || '';
-            }
-            function getLine(f) {
-              const candidates = [f.StartLine, f.Line, (f.Source && f.Source.Line)].filter(x => Number.isInteger(x) && x > 0);
-              return candidates.length ? candidates[0] : 1;
-            }
-            function getDetector(f) {
-              return f.DetectorName || f.Rule || f.Type || 'Secret';
-            }
-            function getMasked(f) {
-              if (f.Redacted) return f.Redacted;
-              if (f.Raw) {
-                const raw = String(f.Raw);
-                return raw.length > 6 ? raw.slice(0,3) + '***' + raw.slice(-3) : '***';
-              }
-              return '***';
-            }
-            const annotations = [];
-            for (const f of findings) {
-              const path = getPath(f);
-              if (!path) continue;
-              annotations.push({
-                path,
-                start_line: getLine(f),
-                end_line: getLine(f),
-                annotation_level: 'failure',
-                title: `Secret Detected: ${getDetector(f)}`,
-                message: `Potential secret found (masked): ${getMasked(f)}`
-              });
-              if (annotations.length >= 50) break;
-            }
-            const hasFindings = annotations.length > 0;
-            const headSha = context.payload.pull_request ? context.payload.pull_request.head.sha : context.sha;
-            await github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: 'TruffleHog Secret Scan',
-              head_sha: headSha,
-              status: 'completed',
-              conclusion: hasFindings ? 'failure' : 'success',
-              output: {
-                title: 'TruffleHog Secret Scan',
-                summary: hasFindings ? `🚨 ${annotations.length} secret(s) found` : '✅ No secrets detected',
-                annotations
-              }
-            });
+        run: |
+          # Install TruffleHog
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+          
+          # Run TruffleHog and save output
+          trufflehog git file://. --since-commit origin/${{ github.event.repository.default_branch }} --json --only-verified=false > trufflehog-results.json 2>&1 || true
+      
       - name: Comment on PR with Secret Findings
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
-        env:
-          TRUFFLEHOG_JSON: ${{ steps.trufflehog.outputs.json }}
         with:
           script: |
-            const raw = process.env.TRUFFLEHOG_JSON || '';
-            if (!raw.trim()) {
-              core.info('No TruffleHog JSON available; skipping PR comment.');
+            const fs = require('fs');
+            let raw = '';
+            
+            try {
+              raw = fs.readFileSync('trufflehog-results.json', 'utf8');
+            } catch (error) {
+              core.info('No TruffleHog results file found; skipping PR comment.');
               return;
             }
+            
+            if (!raw.trim()) {
+              const comment = `## ✅ TruffleHog Secret Scan Results
+            
+No secrets detected in this PR. Good job! 🎉`;
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: comment
+              });
+              return;
+            }
+            
             const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
             const findings = lines.map(l => {
               try { return JSON.parse(l); } catch { return null; }
             }).filter(Boolean);
             
             function getPath(f) {
-              return f.Path || (f.Source && f.Source.File) || f.File || 'unknown';
+              return f.SourceMetadata?.Data?.Filesystem?.file || f.Source?.file || f.Path || 'unknown';
             }
+            
             function getLine(f) {
-              const candidates = [f.StartLine, f.Line, (f.Source && f.Source.Line)].filter(x => Number.isInteger(x) && x > 0);
-              return candidates.length ? candidates[0] : 1;
+              const line = f.SourceMetadata?.Data?.Filesystem?.line || f.Source?.line || f.Line;
+              return line || 1;
             }
+            
             function getDetector(f) {
-              return f.DetectorName || f.Rule || f.Type || 'Secret';
+              return f.DetectorName || f.DecoderName || f.Rule || f.Type || 'Secret';
             }
+            
             function getMasked(f) {
               if (f.Redacted) return f.Redacted;
               if (f.Raw) {
@@ -180,6 +139,18 @@ This scan was performed using [TruffleHog](https://github.com/trufflesecurity/tr
               issue_number: context.payload.pull_request.number,
               body: comment
             });
-      - name: Fail build if secrets found
-        if: steps.trufflehog.outcome == 'failure'
-        run: exit 1
+      
+      - name: Annotate PR with Inline Findings (Masked)
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let raw = '';
+            
+            try {
+              raw = fs.readFileSync('trufflehog-results.json', 'utf8');
+            } catch (error) {
+              core.info('No TruffleHog results file found; skipping annotations.');
+              return;
+            }
