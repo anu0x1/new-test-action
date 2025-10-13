@@ -1,96 +1,30 @@
-name: Secret Scanning (TruffleHog with Inline Annotations + PR Comment)
+name: TruffleHog Secrets Scan
 
 on:
-  pull_request:
   push:
-    branches:
-      - main
-
-permissions:
-  contents: read
-  pull-requests: write
-  checks: write
-  issues: write
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   trufflehog-scan:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Run TruffleHog (Diff scan + capture logs)
+      - name: TruffleHog OSS
         id: trufflehog
-        continue-on-error: true
-        run: |
-          # Run trufflehog and capture full output log
-          trufflehog git file://. --since-commit origin/${{ github.event.repository.default_branch }} --json --only-verified=false | tee trufflehog.log || true
-
-      # ✅ Extract NDJSON lines manually for parsing
-      - name: Extract JSON findings from log
-        if: always()
-        run: |
-          mkdir -p trufflehog-data
-          # Extract valid JSON lines only
-          grep -E '^\{' trufflehog.log > trufflehog-data/findings.jsonl || true
-
-      # ✅ PR Summary Comment (Masked)
-      - name: Comment on PR with masked summary
-        if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v7
-        env:
-          FINDINGS_JSONL: trufflehog-data/findings.jsonl
+        uses: trufflesecurity/trufflehog@main
         with:
-          script: |
-            const fs = require('fs');
-            const issue_number = context.payload.pull_request.number;
-            let content = '';
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --debug --only-verified
 
-            try {
-              content = fs.readFileSync(process.env.FINDINGS_JSONL, 'utf8');
-            } catch (err) {
-              content = '';
-            }
-
-            if (!content.trim()) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number,
-                body: "✅ **TruffleHog Scan Completed — No secrets detected.**"
-              });
-              return;
-            }
-
-            const lines = content.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-            const findings = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-
-            let summary = `🚨 **TruffleHog detected ${findings.length} potential secret(s).**\n\n`;
-            summary += "| File | Line | Type | Masked Value |\n|---|---|---|---|\n";
-
-            findings.slice(0, 20).forEach(f => {
-              const file = f.Path || f.File || "unknown";
-              const line = f.Line || f.StartLine || 1;
-              const type = f.DetectorName || f.Rule || "Secret";
-              let masked = "***";
-              if (f.Redacted) masked = f.Redacted;
-              else if (f.Raw) masked = String(f.Raw).slice(0, 3) + "***" + String(f.Raw).slice(-3);
-              summary += `| \`${file}\` | ${line} | \`${type}\` | \`${masked}\` |\n`;
-            });
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number,
-              body: summary + "\n⚠️ **Review immediately and remove any real secrets.**"
-            });
-
-      # ❌ Fail CI if secrets found via native exit code
-      - name: Fail if secrets detected
-        if: steps.trufflehog.outcome == 'failure'
+      - name: Verify no secrets were found
+        if: ${{ steps.trufflehog.outcome == 'failure' && steps.trufflehog.conclusion == 'success' }}
         run: |
-          echo "❌ TruffleHog detected secrets. Build failed."
+          echo "TruffleHog found secrets in the repository!"
           exit 1
