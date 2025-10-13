@@ -1,4 +1,4 @@
-name: Secret Scanning (TruffleHog)
+name: Secret Scanning (TruffleHog with Inline Annotations + PR Comment)
 
 on:
   pull_request:
@@ -12,24 +12,80 @@ permissions:
   checks: write
 
 jobs:
-  TruffleHog:
+  trufflehog-scan:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Required for diff-based scanning
+          fetch-depth: 0
 
-      - name: Run TruffleHog Secret Scan (Native Inline Mode)
+      - name: Run TruffleHog (Diff scan with inline annotations)
         id: trufflehog
         uses: trufflesecurity/trufflehog@main
         continue-on-error: true
         with:
           path: .
-          # ✅ Only pass debug, Action will auto-add --no-update, --fail, --github-actions
+          base: "${{ github.event.repository.default_branch }}"
+          head: HEAD
           extra_args: --debug
 
-      - name: Fail pipeline if secrets are found
+      # 🔥 PR comment summary (MASKED OUTPUT) — no reports stored
+      - name: Comment on PR with masked summary
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        env:
+          TRUFFLEHOG_RAW: ${{ steps.trufflehog.outputs.json }}
+        with:
+          script: |
+            const raw = process.env.TRUFFLEHOG_RAW || '';
+            if (!raw.trim()) {
+              github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: "✅ **TruffleHog Scan Completed — No secrets detected.**"
+              });
+              return;
+            }
+
+            const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            const findings = lines.map(l => {
+              try { return JSON.parse(l); } catch { return null; }
+            }).filter(Boolean);
+
+            if (findings.length === 0) {
+              github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: "✅ **TruffleHog Scan Completed — No secrets detected.**"
+              });
+              return;
+            }
+
+            let summary = `🚨 **TruffleHog detected ${findings.length} potential secret(s).**\n\n`;
+            summary += "| File | Line | Type | Masked Value |\n|---|---|---|---|\n";
+
+            for (const f of findings.slice(0, 20)) {
+              const file = f.Path || f.File || "unknown";
+              const line = f.Line || f.StartLine || 1;
+              const type = f.DetectorName || f.Rule || "Secret";
+              let masked = "***";
+              if (f.Redacted) masked = f.Redacted;
+              else if (f.Raw) masked = String(f.Raw).slice(0, 3) + "***" + String(f.Raw).slice(-3);
+              summary += `| \`${file}\` | ${line} | \`${type}\` | \`${masked}\` |\n`;
+            }
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: summary + "\n⚠️ **Review immediately and remove any real secrets.**"
+            });
+
+      # ❌ Fail CI if TruffleHog returned outcome=failure
+      - name: Fail if secrets found
         if: steps.trufflehog.outcome == 'failure'
         run: exit 1
