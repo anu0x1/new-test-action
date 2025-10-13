@@ -1,30 +1,25 @@
 name: Secret Scanning (TruffleHog)
-
 on:
   pull_request:
   push:
     branches:
       - main
-
 permissions:
   contents: read
   id-token: write
   pull-requests: write
   checks: write
-
 jobs:
   trufflehog-scan:
     runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-
       - name: Run TruffleHog (Diff Mode with JSON Output)
         id: trufflehog
         uses: trufflesecurity/trufflehog@main
@@ -34,7 +29,6 @@ jobs:
           base: "${{ github.event.repository.default_branch }}"
           head: HEAD
           extra_args: --json --jsonl --debug
-
       - name: Annotate PR with Inline Findings (Masked)
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
@@ -51,7 +45,6 @@ jobs:
             const findings = lines.map(l => {
               try { return JSON.parse(l); } catch { return null; }
             }).filter(Boolean);
-
             function getPath(f) {
               return f.Path || (f.Source && f.Source.File) || f.File || '';
             }
@@ -70,7 +63,6 @@ jobs:
               }
               return '***';
             }
-
             const annotations = [];
             for (const f of findings) {
               const path = getPath(f);
@@ -85,10 +77,8 @@ jobs:
               });
               if (annotations.length >= 50) break;
             }
-
             const hasFindings = annotations.length > 0;
             const headSha = context.payload.pull_request ? context.payload.pull_request.head.sha : context.sha;
-
             await github.rest.checks.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -102,7 +92,94 @@ jobs:
                 annotations
               }
             });
+      - name: Comment on PR with Secret Findings
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        env:
+          TRUFFLEHOG_JSON: ${{ steps.trufflehog.outputs.json }}
+        with:
+          script: |
+            const raw = process.env.TRUFFLEHOG_JSON || '';
+            if (!raw.trim()) {
+              core.info('No TruffleHog JSON available; skipping PR comment.');
+              return;
+            }
+            const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            const findings = lines.map(l => {
+              try { return JSON.parse(l); } catch { return null; }
+            }).filter(Boolean);
+            
+            function getPath(f) {
+              return f.Path || (f.Source && f.Source.File) || f.File || 'unknown';
+            }
+            function getLine(f) {
+              const candidates = [f.StartLine, f.Line, (f.Source && f.Source.Line)].filter(x => Number.isInteger(x) && x > 0);
+              return candidates.length ? candidates[0] : 1;
+            }
+            function getDetector(f) {
+              return f.DetectorName || f.Rule || f.Type || 'Secret';
+            }
+            function getMasked(f) {
+              if (f.Redacted) return f.Redacted;
+              if (f.Raw) {
+                const raw = String(f.Raw);
+                return raw.length > 6 ? raw.slice(0,3) + '***' + raw.slice(-3) : '***';
+              }
+              return '***';
+            }
+            
+            if (findings.length === 0) {
+              const comment = `## ✅ TruffleHog Secret Scan Results
+            
+No secrets detected in this PR. Good job! 🎉`;
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: comment
+              });
+              return;
+            }
+            
+            // Build the findings table
+            let tableRows = findings.slice(0, 50).map((f, idx) => {
+              const path = getPath(f);
+              const line = getLine(f);
+              const detector = getDetector(f);
+              const masked = getMasked(f);
+              return `| ${idx + 1} | \`${detector}\` | \`${path}\` | Line ${line} | \`${masked}\` |`;
+            }).join('\n');
+            
+            const comment = `## 🚨 TruffleHog Secret Scan Results
+            
+**${findings.length} potential secret(s) detected** in this PR.
+            
+| # | Type | File | Location | Masked Secret |
+|---|------|------|----------|---------------|
+${tableRows}
 
+${findings.length > 50 ? `\n_Note: Showing first 50 findings. Total found: ${findings.length}_\n` : ''}
+
+### ⚠️ Action Required
+Please review these findings and take appropriate action:
+1. **Remove** any accidentally committed secrets
+2. **Rotate** any exposed credentials immediately
+3. **Use environment variables or secrets management** for sensitive data
+
+---
+<details>
+<summary>ℹ️ About this scan</summary>
+
+This scan was performed using [TruffleHog](https://github.com/trufflesecurity/trufflehog) to detect accidentally committed secrets. Secrets are masked for security.
+</details>`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: comment
+            });
       - name: Fail build if secrets found
         if: steps.trufflehog.outcome == 'failure'
         run: exit 1
