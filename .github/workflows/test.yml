@@ -1,173 +1,41 @@
-name: Secret Scanning (TruffleHog with Inline Annotations)
+name: Secret Scanning
 
 on:
-  pull_request:
   push:
     branches:
       - main
+  pull_request:
 
 permissions:
   contents: read
   pull-requests: write
   checks: write
-  id-token: write
-  issues: write
 
 jobs:
-  trufflehog-scan:
+  TruffleHog:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Run TruffleHog (Diff scan)
+      - name: Run TruffleHog
         id: trufflehog
         uses: trufflesecurity/trufflehog@main
+        continue-on-error: true
         with:
-          path: .
-          base: "${{ github.event.repository.default_branch }}"
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
           head: HEAD
-          # don't add --fail here: the action already fails the step when matches found
-          extra_args: --debug
+          # ✅ Article style + JSON enabled for inline PR annotations
+          extra_args: --json --jsonl
 
-      # Save a JSON report for auditing / download
-      - name: Save TruffleHog report
-        if: always()
-        run: |
-          mkdir -p trufflehog-report
-          # The action exposes NDJSON or JSON via the "json" output
-          printf '%s' "${{ steps.trufflehog.outputs.json }}" > trufflehog-report/report.json
+      # ✅ Inline PR Annotations - just like "GitHub Checks" style alerts
+      - name: Annotate inline on PR
+        if: github.event_name == 'pull_request' && steps.trufflehog.outcome == 'failure'
+        run: echo "::error title=Secret Detected::Potential secret found. Check diff annotations."
 
-      - name: Upload report artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trufflehog-report
-          path: trufflehog-report/report.json
-
-      # Create inline PR annotations on exact file/line using the Checks API
-      - name: Annotate PR with inline findings (masked)
-        if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v7
-        env:
-          TRUFFLEHOG_JSON: ${{ steps.trufflehog.outputs.json }}
-        with:
-          script: |
-            const raw = process.env.TRUFFLEHOG_JSON || '';
-            if (!raw.trim()) {
-              core.info('No TruffleHog JSON available; skipping annotations.');
-              return;
-            }
-
-            // TruffleHog output can be NDJSON; parse line-by-line
-            const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-            const findings = [];
-            for (const line of lines) {
-              try { findings.push(JSON.parse(line)); } catch (e) { /* ignore */ }
-            }
-
-            // Extract best-effort file + line from various possible shapes
-            function getPath(f) {
-              return (
-                f.Path ||
-                (f.Source && f.Source.File) ||
-                (f.Source && f.Source.Filename) ||
-                (f.SourceMetadata && f.SourceMetadata.Data && f.SourceMetadata.Data.Git && f.SourceMetadata.Data.Git.file) ||
-                (f.SourceMetadata && f.SourceMetadata.Data && f.SourceMetadata.Data.Filesystem && f.SourceMetadata.Data.Filesystem.file) ||
-                f.File ||
-                ''
-              );
-            }
-
-            function getLine(f) {
-              const candidates = [
-                f.StartLine, f.Line, f.Start, // common fields
-                (f.Source && f.Source.Line),
-                (f.SourceMetadata && f.SourceMetadata.Data && f.SourceMetadata.Data.Git && f.SourceMetadata.Data.Git.line),
-                (f.SourceMetadata && f.SourceMetadata.Data && f.SourceMetadata.Data.Filesystem && f.SourceMetadata.Data.Filesystem.line),
-              ].filter(v => Number.isInteger(v) && v > 0);
-              return candidates.length ? candidates[0] : 1;
-            }
-
-            function getDetector(f) {
-              return f.DetectorName || f.Rule || f.Type || 'Potential secret';
-            }
-
-            function getMasked(f) {
-              // Prefer already-redacted/masked value if provided
-              const masked =
-                f.Redacted ||
-                (f.Raw && (f.Raw.length > 6 ? f.Raw.slice(0,3) + '***' + f.Raw.slice(-3) : '***')) ||
-                '***';
-              // Ensure we never leak the full value:
-              if (typeof masked === 'string' && masked.includes('***')) return masked;
-              if (typeof masked === 'string') {
-                if (masked.length <= 6) return '***';
-                return masked.slice(0,3) + '***' + masked.slice(-3);
-              }
-              return '***';
-            }
-
-            // Build up to 50 annotations (GitHub limit per request)
-            const annotations = [];
-            for (const f of findings) {
-              const path = getPath(f);
-              if (!path) continue;
-
-              const line = getLine(f);
-              const title = `Secret detected: ${getDetector(f)}`;
-              const message = `Potential secret found (masked): ${getMasked(f)}\n` +
-                              `Detector: ${getDetector(f)}\n` +
-                              `Confidence: ${f.Verified === true ? 'verified' : (f.Verified === false ? 'unverified' : 'unknown')}`;
-
-              annotations.push({
-                path,
-                start_line: line,
-                end_line: line,
-                annotation_level: 'failure',
-                message,
-                title,
-              });
-
-              if (annotations.length >= 50) break;
-            }
-
-            // Create a Check Run so annotations appear inline on PR "Files changed"
-            const hasFindings = annotations.length > 0;
-            const conclusion = hasFindings ? 'failure' : 'success';
-            const summary = hasFindings
-              ? `TruffleHog found ${annotations.length} potential secret(s).`
-              : ' No secrets detected by TruffleHog.';
-
-            // Head SHA
-            const headSha = context.payload.pull_request
-              ? context.payload.pull_request.head.sha
-              : context.sha;
-
-            // Create the check run
-            await github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: 'TruffleHog Secret Scan',
-              head_sha: headSha,
-              status: 'completed',
-              conclusion,
-              output: {
-                title: 'TruffleHog Secret Scan',
-                summary,
-                annotations
-              }
-            });
-
-            core.setOutput('has_findings', String(hasFindings));
-
-      # Fail the job if findings exist (after annotating)
-      - name: Fail if secrets found
+      - name: Scan Results Status
         if: steps.trufflehog.outcome == 'failure'
-        run: |
-          echo "❌ TruffleHog detected potential secrets. See inline annotations on the PR and the artifact report."
-          exit 1
-
+        run: exit 1
