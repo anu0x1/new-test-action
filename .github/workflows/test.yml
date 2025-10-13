@@ -31,7 +31,7 @@ jobs:
           head: HEAD
           extra_args: --debug
 
-      # 🔥 PR comment summary (MASKED OUTPUT) — no reports stored
+      # ✅ Summary as PR comment (works now since permissions are enabled)
       - name: Comment on PR with masked summary
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
@@ -40,26 +40,27 @@ jobs:
         with:
           script: |
             const raw = process.env.TRUFFLEHOG_RAW || '';
+            const issue_number = context.payload.pull_request.number;
+
             if (!raw.trim()) {
-              github.rest.issues.createComment({
+              await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
+                issue_number,
                 body: "✅ **TruffleHog Scan Completed — No secrets detected.**"
               });
               return;
             }
 
+            // Parse NDJSON output into objects
             const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-            const findings = lines.map(l => {
-              try { return JSON.parse(l); } catch { return null; }
-            }).filter(Boolean);
+            const findings = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 
             if (findings.length === 0) {
-              github.rest.issues.createComment({
+              await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
+                issue_number,
                 body: "✅ **TruffleHog Scan Completed — No secrets detected.**"
               });
               return;
@@ -78,14 +79,14 @@ jobs:
               summary += `| \`${file}\` | ${line} | \`${type}\` | \`${masked}\` |\n`;
             }
 
-            github.rest.issues.createComment({
+            await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
+              issue_number,
               body: summary + "\n⚠️ **Review immediately and remove any real secrets.**"
             });
 
-      # ❌ Fail CI if TruffleHog returned outcome=failure
+      # ❌ Fail CI if TruffleHog flagged secrets
       - name: Fail if secrets found
         if: steps.trufflehog.outcome == 'failure'
         run: exit 1
