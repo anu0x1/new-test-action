@@ -15,32 +15,29 @@ permissions:
 jobs:
   trufflehog-scan:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
 
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # ensures full diff is available for TruffleHog
+          fetch-depth: 0
 
-      - name: Run TruffleHog (Diff Mode)
+      - name: Run TruffleHog Scan (Diff Mode)
         id: trufflehog
         uses: trufflesecurity/trufflehog@main
         with:
           path: .
           base: "${{ github.event.repository.default_branch }}"
           head: HEAD
-          extra_args: --debug --fail
+          # Remove --fail (Already included by the Action)
+          extra_args: --debug
 
-      - name: Fail if TruffleHog found secrets
+      - name: Fail if secrets found
         if: steps.trufflehog.conclusion == 'failure'
         run: |
-          echo " Potential secrets detected by TruffleHog. Review required."
+          echo " TruffleHog detected secrets! Failing CI."
           exit 1
 
-      - name: No Secrets Detected
+      - name: No secrets detected
         if: steps.trufflehog.conclusion == 'success'
-        run: |
-          echo " No secrets detected. You're clean!"
+        run: echo " No secrets found by TruffleHog."
